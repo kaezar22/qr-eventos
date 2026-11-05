@@ -37,6 +37,7 @@ REGISTROS_COLS = [
     "checkin_hora",
     "descuento_usado",   # vacío / SI
     "descuento_hora",
+    "email_enviado",     # SI / ERROR / NO_CONFIGURADO
 ]
 
 # ---------------------------------------------------------------------------

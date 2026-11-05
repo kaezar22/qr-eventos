@@ -6,8 +6,9 @@ App web (Streamlit) para saber cuántas personas trae cada artista o influencer 
 1. El artista crea su invitación y recibe un **link + QR** para compartir con sus seguidores.
 2. El seguidor abre el link, llena sus datos, **acepta la política de tratamiento de datos** y recibe su **QR personal** (único).
 3. Todo queda en Google Sheets: pestaña `invitaciones` (artistas) y pestaña `registros` (seguidores).
+4. El seguidor recibe además su QR por **correo** (Gmail). La columna `email_enviado` dice SI / ERROR / NO_CONFIGURADO.
 
-Siguientes fases: envío del QR por correo, escáner en la puerta (check-in), canje del descuento, panel por artista y votación.
+Siguientes fases: escáner en la puerta (check-in), canje del descuento, panel por artista y votación.
 
 ## Estructura
 
@@ -16,6 +17,7 @@ app.py              # interfaz y rutas (/, /?a=<código>, /?p=privacidad)
 config.py           # nombres de pestañas, columnas, constantes
 core/sheets.py      # lectura/escritura en Google Sheets
 core/qr.py          # generación de QR e identificadores
+core/mailer.py      # envío del QR por correo (SMTP Gmail)
 core/politica.py    # texto de la política de datos (plantilla, revisar con abogado)
 check_sheets.py     # prueba la conexión y crea las pestañas
 ```
@@ -55,13 +57,14 @@ git push -u origin main
 1. New app → repo `qr_eventos`, archivo `app.py`.
 2. En **Settings → Secrets** pega el contenido de `secrets.toml.example` con:
    - `BASE_URL` = la URL pública de la app (ej. `https://qr-eventos.streamlit.app`), para que el link del artista sea correcto.
+   - la sección `[email]` con la cuenta de Gmail y su contraseña de aplicación.
    - la sección `[gcp_service_account]` con los campos del JSON de la cuenta de servicio.
 
 ## Datos en la hoja
 
 **invitaciones:** invitacion_id, creado, artista, red_social, usuario_red, email_artista, evento, fecha_evento, beneficio, activa
 
-**registros:** registro_id, creado, invitacion_id, artista, evento, nombre, email, celular, acepta_politica, version_politica, checkin, checkin_hora, descuento_usado, descuento_hora
+**registros:** registro_id, creado, invitacion_id, artista, evento, nombre, email, celular, acepta_politica, version_politica, checkin, checkin_hora, descuento_usado, descuento_hora, email_enviado
 
 El QR personal contiene `QREV:<registro_id>`; el escáner de la fase 2 usará ese código para marcar `checkin` y `descuento_usado`.
 

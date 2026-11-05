@@ -16,7 +16,7 @@ from config import (
     QR_PERSONAL_PREFIX,
     REDES_SOCIALES,
 )
-from core import sheets
+from core import mailer, sheets
 from core.politica import texto_politica
 from core.qr import nuevo_id, qr_png
 
@@ -219,6 +219,7 @@ def pagina_seguidor(invitacion_id: str):
                     "acepta_politica": "SI",
                     "version_politica": POLITICA_VERSION,
                 }
+                registro["email_enviado"] = enviar_correo(registro, inv)
                 sheets.crear_registro(registro)
         st.session_state[clave_resultado] = registro
         st.rerun()
@@ -226,11 +227,38 @@ def pagina_seguidor(invitacion_id: str):
         mostrar_error_conexion(e)
 
 
+def enviar_correo(registro: dict, inv: dict) -> str:
+    """Envía el QR por correo. Devuelve el estado para la hoja: SI / ERROR / NO_CONFIGURADO."""
+    if not mailer.correo_configurado():
+        return "NO_CONFIGURADO"
+    try:
+        mailer.enviar_qr(
+            destino=registro["email"],
+            nombre=registro["nombre"].split()[0],
+            evento=inv["evento"],
+            artista=inv["artista"],
+            fecha=str(inv.get("fecha_evento", "")),
+            beneficio=str(inv.get("beneficio", "")),
+            codigo=registro["registro_id"],
+            qr_png_bytes=qr_png(f"{QR_PERSONAL_PREFIX}{registro['registro_id']}", box_size=12),
+        )
+        return "SI"
+    except Exception as e:
+        st.session_state["error_correo"] = f"{type(e).__name__}: {e}"
+        return "ERROR"
+
+
 def mostrar_qr_personal(registro: dict, inv: dict):
     if st.session_state.get(f"ya_registrado_{inv['invitacion_id']}"):
         st.info("Ya estabas registrado con este correo. Este es tu QR.")
     else:
         st.success(f"¡Listo, {registro['nombre'].split()[0]}! Este es tu QR personal.")
+        estado = registro.get("email_enviado")
+        if estado == "SI":
+            st.write(f"📧 También te lo enviamos a **{registro['email']}**. "
+                     "Si no lo ves, revisa la carpeta de spam.")
+        elif estado == "ERROR":
+            st.warning("No pudimos enviarte el correo. Descarga el QR o toma un pantallazo.")
     contenido = f"{QR_PERSONAL_PREFIX}{registro['registro_id']}"
     st.image(qr_png(contenido), width=280)
     st.write(f"Código: **{registro['registro_id']}**")
@@ -241,6 +269,17 @@ def mostrar_qr_personal(registro: dict, inv: dict):
         mime="image/png",
         use_container_width=True,
     )
+    if mailer.correo_configurado():
+        clave = f"reenviado_{registro['registro_id']}"
+        if st.button("Enviármelo de nuevo por correo", use_container_width=True,
+                     disabled=st.session_state.get(clave, False)):
+            with st.spinner("Enviando..."):
+                estado = enviar_correo(registro, inv)
+            if estado == "SI":
+                st.session_state[clave] = True  # un reenvío por sesión
+                st.success(f"Enviado a {registro['email']}.")
+            else:
+                st.warning("No pudimos enviar el correo. Intenta más tarde.")
     st.caption(
         "Descárgalo o toma un pantallazo y muéstralo en la entrada. Es personal: "
         "solo sirve para un ingreso."

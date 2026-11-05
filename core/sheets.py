@@ -75,9 +75,15 @@ def _hoja(nombre: str, columnas: list[str]):
         ws.append_row(columnas, value_input_option="RAW")
         ws.freeze(rows=1)
         return ws
-    if not ws.row_values(1):
+    encabezado = ws.row_values(1)
+    if not encabezado:
         ws.update([columnas], "A1")
         ws.freeze(rows=1)
+    elif encabezado != columnas and columnas[: len(encabezado)] == encabezado:
+        # Se agregaron columnas nuevas al final (p. ej. email_enviado): actualizar encabezado.
+        if ws.col_count < len(columnas):
+            ws.add_cols(len(columnas) - ws.col_count)
+        ws.update([columnas], "A1")
     return ws
 
 

@@ -7,17 +7,19 @@ App web (Streamlit) para saber cuántas personas trae cada artista o influencer 
 2. El seguidor abre el link, llena sus datos, **acepta la política de tratamiento de datos** y recibe su **QR personal** (único).
 3. Todo queda en Google Sheets: pestaña `invitaciones` (artistas) y pestaña `registros` (seguidores).
 4. El seguidor recibe además su QR por **correo** (Gmail). La columna `email_enviado` dice SI / ERROR / NO_CONFIGURADO.
+5. **Puerta** (`/?p=puerta`, protegida con `PUERTA_CLAVE`): el portero elige el evento y escanea el QR personal (escáner continuo, foto o código escrito). Marca `checkin` y `checkin_hora`, avisa si el QR ya ingresó o es de otro evento, y muestra la asistencia por artista.
 
-Siguientes fases: escáner en la puerta (check-in), canje del descuento, panel por artista y votación.
+Siguientes fases: canje del descuento, panel por artista y votación.
 
 ## Estructura
 
 ```
-app.py              # interfaz y rutas (/, /?a=<código>, /?p=privacidad)
+app.py              # interfaz y rutas (/, /?a=<código>, /?p=puerta, /?p=privacidad)
 config.py           # nombres de pestañas, columnas, constantes
 core/sheets.py      # lectura/escritura en Google Sheets
 core/qr.py          # generación de QR e identificadores
 core/mailer.py      # envío del QR por correo (SMTP Gmail)
+core/lector.py      # lectura de QR desde foto y validación del código
 core/politica.py    # texto de la política de datos (plantilla, revisar con abogado)
 check_sheets.py     # prueba la conexión y crea las pestañas
 ```
@@ -56,7 +58,8 @@ git push -u origin main
 
 1. New app → repo `qr_eventos`, archivo `app.py`.
 2. En **Settings → Secrets** pega el contenido de `secrets.toml.example` con:
-   - `BASE_URL` = la URL pública de la app (ej. `https://qr-eventos.streamlit.app`), para que el link del artista sea correcto.
+   - `BASE_URL` = la URL pública de la app (ej. `https://qreventos.streamlit.app`), para que el link del artista sea correcto.
+   - `PUERTA_CLAVE` = clave de la página de puerta.
    - la sección `[email]` con la cuenta de Gmail y su contraseña de aplicación.
    - la sección `[gcp_service_account]` con los campos del JSON de la cuenta de servicio.
 
@@ -66,6 +69,6 @@ git push -u origin main
 
 **registros:** registro_id, creado, invitacion_id, artista, evento, nombre, email, celular, acepta_politica, version_politica, checkin, checkin_hora, descuento_usado, descuento_hora, email_enviado
 
-El QR personal contiene `QREV:<registro_id>`; el escáner de la fase 2 usará ese código para marcar `checkin` y `descuento_usado`.
+El QR personal contiene `QREV:<registro_id>`; la página de puerta lo usa para marcar `checkin`; el canje del descuento (siguiente fase) marcará `descuento_usado`.
 
 Un mismo correo solo se registra una vez por invitación: si repite, recibe el mismo QR.

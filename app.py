@@ -5,10 +5,16 @@ Rutas (por parámetro en la URL):
   /?a=<código>      -> el seguidor se registra y obtiene su QR personal
   /?p=privacidad    -> política de tratamiento de datos
 """
+import hmac
 import re
 from datetime import date
 
 import streamlit as st
+
+try:
+    from streamlit_qrcode_scanner import qrcode_scanner
+except ImportError:  # el escáner continuo es opcional
+    qrcode_scanner = None
 
 from config import (
     APP_NAME,
@@ -17,6 +23,7 @@ from config import (
     REDES_SOCIALES,
 )
 from core import mailer, sheets
+from core.lector import leer_qr_de_imagen, normalizar_codigo
 from core.politica import texto_politica
 from core.qr import nuevo_id, qr_png
 
@@ -93,7 +100,7 @@ def pagina_artista():
             "Beneficio para tus seguidores",
             placeholder="Ej: 10% de descuento en consumo",
         )
-        enviar = st.form_submit_button("Generar mi QR", type="primary", use_container_width=True)
+        enviar = st.form_submit_button("Generar mi QR", type="primary", width="stretch")
 
     if enviar:
         errores = []
@@ -134,7 +141,7 @@ def pagina_artista():
             data=qr_png(link, box_size=16),
             file_name=f"qr_{inv['artista']}_{inv['invitacion_id']}.png".replace(" ", "_"),
             mime="image/png",
-            use_container_width=True,
+            width="stretch",
         )
         st.caption(
             f"Código de tu invitación: **{inv['invitacion_id']}**. Guárdalo: con él "
@@ -181,7 +188,7 @@ def pagina_seguidor(invitacion_id: str):
             "Autorizo el tratamiento de mis datos personales según la política "
             "de tratamiento de datos. *"
         )
-        enviar = st.form_submit_button("Obtener mi QR", type="primary", use_container_width=True)
+        enviar = st.form_submit_button("Obtener mi QR", type="primary", width="stretch")
 
     if not enviar:
         return
@@ -267,11 +274,11 @@ def mostrar_qr_personal(registro: dict, inv: dict):
         data=qr_png(contenido, box_size=16),
         file_name=f"mi_qr_{registro['registro_id']}.png",
         mime="image/png",
-        use_container_width=True,
+        width="stretch",
     )
     if mailer.correo_configurado():
         clave = f"reenviado_{registro['registro_id']}"
-        if st.button("Enviármelo de nuevo por correo", use_container_width=True,
+        if st.button("Enviármelo de nuevo por correo", width="stretch",
                      disabled=st.session_state.get(clave, False)):
             with st.spinner("Enviando..."):
                 estado = enviar_correo(registro, inv)
@@ -287,6 +294,116 @@ def mostrar_qr_personal(registro: dict, inv: dict):
 
 
 # ---------------------------------------------------------------------------
+# Página: puerta (check-in)
+# ---------------------------------------------------------------------------
+def pagina_puerta():
+    st.title("🚪 Puerta")
+
+    clave_ok = _secret("PUERTA_CLAVE")
+    if not clave_ok:
+        st.error("Falta configurar PUERTA_CLAVE en los secrets.")
+        return
+    if not st.session_state.get("puerta_ok"):
+        with st.form("form_clave"):
+            clave = st.text_input("Clave de puerta", type="password")
+            entrar = st.form_submit_button("Entrar", type="primary", width="stretch")
+        if entrar:
+            if hmac.compare_digest(clave.encode(), str(clave_ok).encode()):
+                st.session_state["puerta_ok"] = True
+                st.rerun()
+            else:
+                st.error("Clave incorrecta.")
+        return
+
+    try:
+        lista_eventos = sheets.eventos()
+    except Exception as e:
+        mostrar_error_conexion(e)
+        return
+    if not lista_eventos:
+        st.info("Todavía no hay eventos con invitaciones.")
+        return
+    evento = st.selectbox("Evento", lista_eventos, key="puerta_evento")
+
+    tab_scan, tab_foto, tab_manual = st.tabs(["📷 Escanear", "🖼️ Foto", "⌨️ Código"])
+    leido = None
+    with tab_scan:
+        if qrcode_scanner is None:
+            st.warning("El escáner continuo no está disponible. Usa Foto o Código.")
+        else:
+            st.caption("Apunta la cámara al QR. Lee solo; no hay que oprimir nada.")
+            valor = qrcode_scanner(key="scanner")
+            # El componente devuelve el último QR leído en cada recarga:
+            # solo procesamos cuando cambia.
+            if valor and valor != st.session_state.get("ultimo_scan"):
+                st.session_state["ultimo_scan"] = valor
+                leido = valor
+    with tab_foto:
+        foto = st.camera_input("Toma una foto del QR", label_visibility="collapsed")
+        if foto is not None and foto.file_id != st.session_state.get("ultima_foto"):
+            st.session_state["ultima_foto"] = foto.file_id
+            leido = leer_qr_de_imagen(foto.getvalue()) or ""
+            if not leido:
+                st.warning("No se encontró un QR en la foto. Acércala y vuelve a intentar.")
+                leido = None
+    with tab_manual:
+        with st.form("form_codigo", clear_on_submit=True):
+            escrito = st.text_input("Código del QR", placeholder="Ej: F5MZJ7PVHP")
+            if st.form_submit_button("Validar", width="stretch") and escrito:
+                leido = escrito
+
+    if leido is not None:
+        codigo = normalizar_codigo(leido)
+        if codigo is None:
+            st.session_state["puerta_resultado"] = ("INVALIDO", None, leido)
+        else:
+            try:
+                estado, registro = sheets.registrar_checkin(codigo, evento)
+                st.session_state["puerta_resultado"] = (estado, registro, codigo)
+            except Exception as e:
+                mostrar_error_conexion(e)
+
+    mostrar_resultado_puerta(st.session_state.get("puerta_resultado"))
+
+    st.divider()
+    c1, c2 = st.columns([3, 1])
+    c1.subheader("Asistencia por artista")
+    if c2.button("Actualizar", width="stretch"):
+        pass  # el clic recarga la página y el resumen se lee de nuevo
+    try:
+        resumen = sheets.resumen_evento(evento)
+    except Exception as e:
+        mostrar_error_conexion(e)
+        return
+    if not resumen:
+        st.caption("Aún no hay registros para este evento.")
+        return
+    m1, m2 = st.columns(2)
+    m1.metric("Ingresaron", sum(r["Ingresaron"] for r in resumen))
+    m2.metric("Registrados", sum(r["Registrados"] for r in resumen))
+    st.dataframe(resumen, hide_index=True, width="stretch")
+
+
+def mostrar_resultado_puerta(resultado):
+    if not resultado:
+        return
+    estado, reg, codigo = resultado
+    if estado == "OK":
+        st.success(f"### ✅ Bienvenido/a, {reg['nombre']}\n"
+                   f"Viene por **{reg['artista']}** · código {codigo}")
+    elif estado == "YA_INGRESO":
+        st.error(f"### ⛔ Este QR ya ingresó\n"
+                 f"{reg['nombre']} ({reg['artista']}) entró a las **{reg['checkin_hora']}**.")
+    elif estado == "OTRO_EVENTO":
+        st.warning(f"### ⚠️ QR de otro evento\n"
+                   f"{reg['nombre']} está registrado para **{reg['evento']}**.")
+    elif estado == "NO_EXISTE":
+        st.error(f"### ❌ Código no encontrado\n`{codigo}` no está registrado.")
+    else:
+        st.error("### ❌ Este QR no es de QR Eventos")
+
+
+# ---------------------------------------------------------------------------
 # Página: política
 # ---------------------------------------------------------------------------
 def pagina_politica():
@@ -299,6 +416,8 @@ def pagina_politica():
 params = st.query_params
 if params.get("p") == "privacidad":
     pagina_politica()
+elif params.get("p") == "puerta":
+    pagina_puerta()
 elif params.get("a"):
     pagina_seguidor(params["a"])
 else:

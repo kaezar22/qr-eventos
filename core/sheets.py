@@ -138,6 +138,63 @@ def crear_registro(datos: dict) -> None:
     _leer.clear()
 
 
+# ---------------------------------------------------------------------------
+# Puerta (check-in)
+# ---------------------------------------------------------------------------
+def eventos() -> list[str]:
+    """Eventos distintos con invitaciones activas, más recientes primero."""
+    filas = _leer(WS_INVITACIONES, tuple(INVITACIONES_COLS))
+    vistos = []
+    for f in reversed(filas):
+        ev = str(f["evento"]).strip()
+        if ev and str(f.get("activa", "SI")).upper() == "SI" and ev not in vistos:
+            vistos.append(ev)
+    return vistos
+
+
+def registrar_checkin(registro_id: str, evento: str) -> tuple[str, dict | None]:
+    """Marca el ingreso. Lee siempre en vivo (sin caché) para evitar dobles entradas.
+
+    Devuelve (estado, registro):
+      "OK"          -> ingreso marcado ahora
+      "YA_INGRESO"  -> el código ya había entrado (registro["checkin_hora"] dice cuándo)
+      "NO_EXISTE"   -> código desconocido
+      "OTRO_EVENTO" -> el QR es de otro evento (no se marca)
+    """
+    ws = _hoja(WS_REGISTROS, REGISTROS_COLS)
+    celda = ws.find(registro_id, in_column=1, case_sensitive=True)
+    if celda is None:
+        return "NO_EXISTE", None
+    valores = ws.row_values(celda.row)
+    registro = dict(zip(REGISTROS_COLS, valores + [""] * (len(REGISTROS_COLS) - len(valores))))
+    if registro["evento"] != evento:
+        return "OTRO_EVENTO", registro
+    if registro["checkin"] == "SI":
+        return "YA_INGRESO", registro
+    col = REGISTROS_COLS.index("checkin") + 1
+    hora = ahora()
+    inicio = gspread.utils.rowcol_to_a1(celda.row, col)
+    fin = gspread.utils.rowcol_to_a1(celda.row, col + 1)
+    ws.update([["SI", hora]], f"{inicio}:{fin}", value_input_option="RAW")
+    registro.update(checkin="SI", checkin_hora=hora)
+    _leer.clear()
+    return "OK", registro
+
+
+def resumen_evento(evento: str) -> list[dict]:
+    """Por artista: registrados e ingresaron, para un evento."""
+    _leer.clear()
+    conteo: dict[str, dict] = {}
+    for f in _leer(WS_REGISTROS, tuple(REGISTROS_COLS)):
+        if f["evento"] != evento:
+            continue
+        c = conteo.setdefault(f["artista"], {"Artista": f["artista"], "Registrados": 0, "Ingresaron": 0})
+        c["Registrados"] += 1
+        if f["checkin"] == "SI":
+            c["Ingresaron"] += 1
+    return sorted(conteo.values(), key=lambda c: -c["Ingresaron"])
+
+
 def verificar_conexion() -> str:
     """Abre la hoja y crea las pestañas si faltan. Devuelve el título."""
     sh = _spreadsheet()

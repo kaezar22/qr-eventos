@@ -1,0 +1,14 @@
+# Credenciales: NUNCA subir a GitHub
+service_account.json
+*service_account*.json
+.streamlit/secrets.toml
+.env
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Secrets generados para Streamlit Cloud
+cloud_secrets.toml

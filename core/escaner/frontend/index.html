@@ -38,15 +38,20 @@
   function alto() { enviar("streamlit:setFrameHeight", { height: document.body.scrollHeight + 4 }); }
   function enviarValor(v) { enviar("streamlit:setComponentValue", { value: v, dataType: "json" }); }
 
-  var CLAVE = "qrev_camara";
+  var CLAVE = "qrev_camara_v2";
+  var AUTO = {
+    "auto-env": { etiqueta: "📷 Trasera (automática)", fuentes: [{ facingMode: { exact: "environment" } }, { facingMode: "environment" }] },
+    "auto-user": { etiqueta: "🤳 Frontal (automática)", fuentes: [{ facingMode: { exact: "user" } }, { facingMode: "user" }] }
+  };
   var sel = document.getElementById("camaras");
   var btn = document.getElementById("cambiar");
   var estado = document.getElementById("estado");
-  var lector = null, camaras = [], ultimo = "", ultimoT = 0, iniciado = false;
+  var lector = null, actual = null, ultimo = "", ultimoT = 0, iniciado = false, ocupado = false, ultimoError = null;
 
+  function esperar(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
   function mostrar(msg, clase) { estado.textContent = msg; estado.className = clase || ""; alto(); }
   function leerGuardada() { try { return localStorage.getItem(CLAVE); } catch (e) { return null; } }
-  function guardar(id) { try { localStorage.setItem(CLAVE, id); } catch (e) {} }
+  function guardar(v) { try { localStorage.setItem(CLAVE, v); } catch (e) {} }
 
   function pitido() {
     try {
@@ -67,15 +72,6 @@
     enviarValor({ text: texto, ts: ahora });
   }
 
-  function elegirInicial() {
-    var guardada = leerGuardada();
-    var i = camaras.findIndex(function (c) { return c.id === guardada; });
-    if (i >= 0) return i;
-    i = camaras.findIndex(function (c) { return /back|rear|trás|tras|environment|posterior|trasera/i.test(c.label); });
-    if (i >= 0) return i;
-    return camaras.length > 1 ? camaras.length - 1 : 0;
-  }
-
   function config() {
     return {
       fps: 10,
@@ -83,45 +79,112 @@
     };
   }
 
-  async function detener() {
-    if (lector && lector.isScanning) { try { await lector.stop(); } catch (e) {} }
+  function explicar(e) {
+    var txt = String((e && (e.name || e.message)) || e || "");
+    var m = txt.match(/(\w+Error)/);
+    var nombre = m ? m[1] : (txt.slice(0, 60) || "error desconocido");
+    var pista = {
+      NotReadableError: "La cámara está ocupada (otra app o pestaña). Ciérralas y recarga.",
+      TrackStartError: "La cámara está ocupada (otra app o pestaña). Ciérralas y recarga.",
+      OverconstrainedError: "Este celular no deja abrir esa cámara directamente. Usa \"Trasera (automática)\".",
+      NotAllowedError: "No hay permiso para la cámara. Habilítalo en el navegador y recarga.",
+      NotFoundError: "No se encontró esa cámara."
+    }[nombre] || "Prueba con otra opción de la lista.";
+    return pista + " (" + nombre + ")";
   }
 
-  async function iniciar(i) {
+  async function detener() {
+    if (!lector) return;
+    try { if (lector.isScanning) await lector.stop(); } catch (e) {}
+    try { lector.clear(); } catch (e) {}
+    lector = null;
+  }
+
+  // Abre una cámara probando cada fuente; suelta la anterior y espera antes de abrir.
+  async function abrirFuentes(fuentes) {
     await detener();
-    sel.value = String(i);
-    mostrar("Iniciando cámara…");
-    try {
-      await lector.start(camaras[i].id, config(), alLeer, function () {});
-      guardar(camaras[i].id);
+    await esperar(400);
+    for (var i = 0; i < fuentes.length; i++) {
+      for (var intento = 0; intento < 2; intento++) {
+        var l = new Html5Qrcode("lector", { verbose: false });
+        try {
+          await l.start(fuentes[i], config(), alLeer, function () {});
+          lector = l;
+          return true;
+        } catch (e) {
+          ultimoError = e;
+          try { l.clear(); } catch (e2) {}
+          await esperar(700);
+        }
+      }
+    }
+    return false;
+  }
+
+  function fuentesDe(valor) { return AUTO[valor] ? AUTO[valor].fuentes : [valor]; }
+
+  async function abrir(valor) {
+    if (ocupado) return false;
+    ocupado = true; sel.disabled = true; btn.disabled = true;
+    mostrar("Abriendo cámara…");
+    var ok = await abrirFuentes(fuentesDe(valor));
+    ocupado = false; sel.disabled = false; btn.disabled = sel.options.length < 2;
+    if (ok) {
+      actual = valor; sel.value = valor; guardar(valor);
       mostrar("Apunta al QR. Lee solo.");
-    } catch (e) {
-      mostrar("No se pudo abrir esa cámara. Prueba con otra.", "error");
     }
     alto();
+    return ok;
+  }
+
+  async function llenarLista() {
+    var dispositivos = [];
+    try {
+      dispositivos = (await navigator.mediaDevices.enumerateDevices())
+        .filter(function (d) { return d.kind === "videoinput"; });
+    } catch (e) {}
+    sel.innerHTML = "";
+    Object.keys(AUTO).forEach(function (k) {
+      var o = document.createElement("option"); o.value = k; o.textContent = AUTO[k].etiqueta; sel.appendChild(o);
+    });
+    dispositivos.forEach(function (d, i) {
+      if (!d.deviceId) return;
+      var o = document.createElement("option");
+      o.value = d.deviceId; o.textContent = d.label || ("Cámara " + (i + 1));
+      sel.appendChild(o);
+    });
+    if (actual) sel.value = actual;
+    btn.disabled = sel.options.length < 2;
+  }
+
+  async function cambiarA(valor) {
+    var anterior = actual;
+    if (await abrir(valor)) return;
+    var msg = "No se pudo abrir esa cámara. " + explicar(ultimoError);
+    if (anterior && anterior !== valor && await abrir(anterior)) {
+      mostrar(msg, "error");
+    } else {
+      sel.value = valor;
+      mostrar(msg, "error");
+    }
   }
 
   async function init() {
-    lector = new Html5Qrcode("lector", { verbose: false });
-    try {
-      camaras = await Html5Qrcode.getCameras();
-    } catch (e) {
-      mostrar("Sin permiso para la cámara. Habilítala en el navegador y recarga la página.", "error");
-      return;
-    }
-    if (!camaras.length) { mostrar("No se encontró ninguna cámara.", "error"); return; }
-    sel.innerHTML = "";
-    camaras.forEach(function (c, i) {
-      var o = document.createElement("option");
-      o.value = String(i);
-      o.textContent = c.label || ("Cámara " + (i + 1));
-      sel.appendChild(o);
-    });
-    btn.disabled = camaras.length < 2;
-    sel.onchange = function () { iniciar(parseInt(sel.value, 10)); };
-    btn.onclick = function () { iniciar((parseInt(sel.value, 10) + 1) % camaras.length); };
-    await iniciar(elegirInicial());
+    var guardada = leerGuardada();
+    var ok = false;
+    if (guardada) ok = await abrir(guardada);
+    if (!ok) ok = await abrir("auto-env");
+    if (!ok) ok = await abrir("auto-user");
+    await llenarLista();   // después del permiso: los nombres de las cámaras ya están disponibles
+    if (!ok) { mostrar("No se pudo abrir la cámara. " + explicar(ultimoError), "error"); return; }
+    sel.value = actual;
   }
+
+  sel.onchange = function () { cambiarA(sel.value); };
+  btn.onclick = function () {
+    var i = (sel.selectedIndex + 1) % sel.options.length;
+    cambiarA(sel.options[i].value);
+  };
 
   window.addEventListener("message", function (ev) {
     if (ev.data && ev.data.type === "streamlit:render" && !iniciado) { iniciado = true; init(); }

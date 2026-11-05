@@ -2,6 +2,5 @@ streamlit>=1.50
 gspread>=6.0
 google-auth>=2.20
 qrcode[pil]>=7.4
-streamlit-qrcode-scanner>=0.1.2
 opencv-python-headless>=4.8
 numpy

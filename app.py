@@ -3,6 +3,7 @@
 Rutas (por parámetro en la URL):
   /                 -> el artista crea su invitación y obtiene link + QR para compartir
   /?a=<código>      -> el seguidor se registra y obtiene su QR personal
+  /?p=puerta        -> escáner de la puerta (pide PUERTA_CLAVE)
   /?p=privacidad    -> política de tratamiento de datos
 """
 import hmac
@@ -11,11 +12,6 @@ from datetime import date
 
 import streamlit as st
 
-try:
-    from streamlit_qrcode_scanner import qrcode_scanner
-except ImportError:  # el escáner continuo es opcional
-    qrcode_scanner = None
-
 from config import (
     APP_NAME,
     POLITICA_VERSION,
@@ -23,6 +19,7 @@ from config import (
     REDES_SOCIALES,
 )
 from core import mailer, sheets
+from core.escaner import escaner_qr
 from core.lector import leer_qr_de_imagen, normalizar_codigo
 from core.politica import texto_politica
 from core.qr import nuevo_id, qr_png
@@ -325,20 +322,20 @@ def pagina_puerta():
         return
     evento = st.selectbox("Evento", lista_eventos, key="puerta_evento")
 
-    tab_scan, tab_foto, tab_manual = st.tabs(["📷 Escanear", "🖼️ Foto", "⌨️ Código"])
+    # Un solo modo a la vez: así el escáner y la foto no compiten por la cámara.
+    modo = st.radio("Modo", ["📷 Escanear", "🖼️ Foto", "⌨️ Código"],
+                    horizontal=True, label_visibility="collapsed", key="puerta_modo")
     leido = None
-    with tab_scan:
-        if qrcode_scanner is None:
-            st.warning("El escáner continuo no está disponible. Usa Foto o Código.")
-        else:
-            st.caption("Apunta la cámara al QR. Lee solo; no hay que oprimir nada.")
-            valor = qrcode_scanner(key="scanner")
-            # El componente devuelve el último QR leído en cada recarga:
-            # solo procesamos cuando cambia.
-            if valor and valor != st.session_state.get("ultimo_scan"):
-                st.session_state["ultimo_scan"] = valor
-                leido = valor
-    with tab_foto:
+    if modo == "📷 Escanear":
+        valor = escaner_qr(key="escaner")
+        # El componente devuelve el último QR leído en cada recarga:
+        # solo procesamos cuando llega una lectura nueva (marca de tiempo distinta).
+        if valor and valor.get("ts") != st.session_state.get("ultimo_scan_ts"):
+            st.session_state["ultimo_scan_ts"] = valor.get("ts")
+            leido = str(valor.get("text", ""))
+    elif modo == "🖼️ Foto":
+        st.caption("La foto usa la cámara que elija el navegador. Si no es la correcta, "
+                   "usa el modo Escanear, que permite elegir cámara.")
         foto = st.camera_input("Toma una foto del QR", label_visibility="collapsed")
         if foto is not None and foto.file_id != st.session_state.get("ultima_foto"):
             st.session_state["ultima_foto"] = foto.file_id
@@ -346,7 +343,7 @@ def pagina_puerta():
             if not leido:
                 st.warning("No se encontró un QR en la foto. Acércala y vuelve a intentar.")
                 leido = None
-    with tab_manual:
+    else:
         with st.form("form_codigo", clear_on_submit=True):
             escrito = st.text_input("Código del QR", placeholder="Ej: F5MZJ7PVHP")
             if st.form_submit_button("Validar", width="stretch") and escrito:
